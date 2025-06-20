@@ -1,5 +1,3 @@
-# main.py
-
 import telebot
 import requests
 import os
@@ -8,7 +6,18 @@ from keep_alive import keep_alive
 
 bot = telebot.TeleBot(config.TOKEN)
 
+def fix_youtube_shorts(url):
+    # Convert shorts URL to normal YouTube watch URL
+    if "youtube.com/shorts/" in url:
+        try:
+            video_id = url.split("/shorts/")[1].split("?")[0]
+            return f"https://www.youtube.com/watch?v={video_id}"
+        except IndexError:
+            return url
+    return url
+
 def get_platform(url):
+    url = url.lower()
     if "youtu" in url:
         return "youtube"
     elif "instagram" in url or "insta" in url:
@@ -33,11 +42,14 @@ def get_api_url(platform, url):
 
 @bot.message_handler(commands=['start'])
 def start_message(msg):
-    bot.send_message(msg.chat.id, "👋 Send me a link from YouTube, Instagram, Facebook, or Reddit and I’ll download it for you!")
+    bot.send_message(msg.chat.id, "👋 Send me a link from YouTube, Instagram, Facebook, or Reddit and I'll download it for you!")
 
 @bot.message_handler(func=lambda msg: True)
 def handle_message(msg):
-    url = msg.text.strip()
+    raw_url = msg.text.strip()
+    # Fix shorts URLs for YouTube
+    url = fix_youtube_shorts(raw_url)
+
     platform = get_platform(url)
 
     if not platform:
@@ -55,6 +67,9 @@ def handle_message(msg):
         api_url = get_api_url(platform, url)
         res = requests.get(api_url).json()
 
+        # Debug log - uncomment if needed
+        # print("API response:", res)
+
         if "url" not in res:
             bot.edit_message_text("❌ Failed to fetch download link. Try another URL.", sent.chat.id, sent.message_id)
             return
@@ -71,14 +86,23 @@ def handle_message(msg):
             bot.edit_message_text("❌ File too large to download.", sent.chat.id, sent.message_id)
             return
 
-        filename = "downloaded_file.mp4"  # Assuming all are video for now
+        # Guess file extension from url or default to mp4
+        ext = file_url.split('.')[-1].split('?')[0]
+        if ext.lower() not in ['mp4', 'jpg', 'jpeg', 'png', 'gif', 'mp3', 'mkv']:
+            ext = 'mp4'
+
+        filename = f"downloaded_file.{ext}"
 
         with open(filename, 'wb') as f:
             f.write(file_data.content)
 
         with open(filename, 'rb') as f:
-            caption = f"🎬 *Video by* _{uploader}_\n\n📎 `{url}`\n```{caption_text}```\n\n@YourBotUsername"
-            bot.send_video(msg.chat.id, f, caption=caption, parse_mode="Markdown")
+            caption = f"🎬 *Video by* _{uploader}_\n\n🔗 `{url}`\n```{caption_text}```\n\n@YourBotUsername"
+            # Send as video or photo based on extension
+            if ext in ['jpg', 'jpeg', 'png', 'gif']:
+                bot.send_photo(msg.chat.id, f, caption=caption, parse_mode="Markdown")
+            else:
+                bot.send_video(msg.chat.id, f, caption=caption, parse_mode="Markdown")
 
         os.remove(filename)
 
@@ -87,13 +111,16 @@ def handle_message(msg):
         except:
             pass
 
-        # Log to log channel if set
         if config.LOG_CHANNEL:
-            bot.send_message(config.LOG_CHANNEL, f"📥 New download from [{msg.from_user.first_name}](tg://user?id={msg.from_user.id})\nPlatform: {platform}\nURL: {url}", parse_mode="Markdown")
+            bot.send_message(
+                config.LOG_CHANNEL,
+                f"📥 New download from [{msg.from_user.first_name}](tg://user?id={msg.from_user.id})\nPlatform: {platform}\nURL: {url}",
+                parse_mode="Markdown"
+            )
 
     except Exception as e:
         bot.edit_message_text(f"❌ Error: {str(e)}", sent.chat.id, sent.message_id)
 
-# Keep alive (Flask) + start polling
+# Start keep-alive and bot
 keep_alive()
 bot.infinity_polling()
